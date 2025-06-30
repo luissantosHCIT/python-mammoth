@@ -19,13 +19,14 @@ from ..zips import open_zip
 _empty_result = results.success([])
 
 
-def read(fileobj):
+def read(fileobj, embed_css=False):
     zip_file = open_zip(fileobj, "r")
     part_paths = _find_part_paths(zip_file)
     read_part_with_body = _part_with_body_reader(
         getattr(fileobj, "name", None),
         zip_file,
         part_paths=part_paths,
+        embed_css=embed_css
     )
 
     return results.combine([
@@ -104,12 +105,12 @@ def _read_notes(read_part_with_body, part_paths):
     footnotes = read_part_with_body(
         part_paths.footnotes,
         lambda root, body_reader: read_footnotes_xml_element(root, body_reader=body_reader),
-        default=_empty_result,
+        default=_empty_result
     )
     endnotes = read_part_with_body(
         part_paths.endnotes,
         lambda root, body_reader: read_endnotes_xml_element(root, body_reader=body_reader),
-        default=_empty_result,
+        default=_empty_result
     )
 
     return results.combine([footnotes, endnotes]).map(lists.flatten)
@@ -119,7 +120,7 @@ def _read_comments(read_part_with_body, part_paths):
     return read_part_with_body(
         part_paths.comments,
         lambda root, body_reader: read_comments_xml_element(root, body_reader=body_reader),
-        default=_empty_result,
+        default=_empty_result
     )
 
 
@@ -129,12 +130,12 @@ def _read_document(zip_file, read_part_with_body, notes, comments, part_paths):
         partial(
             read_document_xml_element,
             notes=notes,
-            comments=comments,
+            comments=comments
         ),
     )
 
 
-def _part_with_body_reader(document_path, zip_file, part_paths):
+def _part_with_body_reader(document_path, zip_file, part_paths, embed_css=False):
     content_types = _try_read_entry_or_default(
         zip_file,
         "[Content_Types].xml",
@@ -166,6 +167,7 @@ def _part_with_body_reader(document_path, zip_file, part_paths):
             styles=styles,
             docx_file=zip_file,
             files=Files(None if document_path is None else os.path.dirname(document_path)),
+            embed_css=embed_css
         )
 
         if default is _undefined:

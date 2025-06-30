@@ -5,17 +5,23 @@ import shutil
 import sys
 
 import mammoth
+from mammoth.attributes import CSSStore
 from . import writers
+from .debug import set_debug_mode, is_debug_mode
 
 
 def main():
     args = _parse_args()
+
+    set_debug_mode(args.debug)
     
     if args.style_map is None:
         style_map = None
     else:
         with open(args.style_map) as style_map_fileobj:
             style_map = style_map_fileobj.read()
+
+    #css = CSSStore(args.embed_css)
     
     with open(args.path, "rb") as docx_fileobj:
         if args.output_dir is None:
@@ -25,12 +31,14 @@ def main():
             convert_image = mammoth.images.img_element(ImageWriter(args.output_dir))
             output_filename = "{0}.html".format(os.path.basename(args.path).rpartition(".")[0])
             output_path = os.path.join(args.output_dir, output_filename)
-        
+
         result = mammoth.convert(
             docx_fileobj,
             style_map=style_map,
             convert_image=convert_image,
             output_format=args.output_format,
+            ignore_empty_paragraphs=not args.preserve_layout,
+            embed_css=args.embed_css
         )
         for message in result.messages:
             sys.stderr.write(message.message)
@@ -86,7 +94,6 @@ def _parse_args():
     output_group.add_argument(
         "--output-dir",
         help="Output directory for generated HTML and images. Images will be stored in separate files. Mutually exclusive with output-path.")
-    
     parser.add_argument(
         "--output-format",
         required=False,
@@ -96,6 +103,23 @@ def _parse_args():
         "--style-map",
         required=False,
         help="File containg a style map.")
+    parser.add_argument(
+        "--preserve-layout",
+        required=False,
+        action='store_true',
+        help="Keep all paragraphs from the input document. Useful if spacing is important for proper layout of output document.")
+    output_group.add_argument(
+        "--embed-css",
+        required=False,
+        action='store_true',
+        help="Requests that the application generates CSS off the Word document styles and embed theem at the node "
+             "level. Beware that this will make the file larger, but it will improve document fidelity when copying "
+             "and pasting contents in the generated HTML page to other programs.")
+    parser.add_argument(
+        "--debug",
+        required=False,
+        action='store_true',
+        help="Allows to run utility in debug mode if testing a logic path on this installation of the project.")
     return parser.parse_args()
 
 
