@@ -102,6 +102,16 @@ class TableCell(HasChildren):
 
 
 @cobble.data
+class TableCellUnmerged:
+    children = cobble.field()
+    colspan = cobble.field()
+    rowspan = cobble.field()
+    vmerge = cobble.field()
+
+    def copy(self, **kwargs):
+        return cobble.copy(self, **kwargs)
+
+@cobble.data
 class Break(Element):
     break_type = cobble.field()
 
@@ -221,6 +231,8 @@ def table_row(children, is_header=None, formatting=None, style_id=None, style_na
 def table_cell(children, formatting=None, style_id=None, style_name=None):
     return TableCell(children=children, formatting=formatting, style_id=style_id, style_name=style_name)
 
+def table_cell_unmerged(children, colspan, rowspan, vmerge):
+    return TableCellUnmerged(children=children, colspan=colspan, rowspan=rowspan, vmerge=vmerge)
 
 def numbering_level(level_index, is_ordered):
     return _NumberingLevel(str(level_index), bool(is_ordered))
