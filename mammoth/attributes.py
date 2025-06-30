@@ -201,7 +201,7 @@ class CSSStore(dict):
 def compose_attributes(element, initial_attributes={}):
     attributes = copy.deepcopy(initial_attributes)
     formatting = getattr(element, 'formatting', {})
-    attribute_formatting = formatting.get('attributes', {})
+    attribute_formatting = formatting.get('attributes', {}) if not formatting is None else {}
 
     if not isinstance(element, WordElement):
         return attributes
@@ -283,15 +283,17 @@ def compose_conditional_styles(attributes, formatting):
 
 
 def compose_style(formatting):
-    css = [
-        compose_style_category(formatting, 'table_style'),
-        compose_style_category(formatting, 'table_row_style'),
-        compose_style_category(formatting, 'cell_style'),
-        compose_style_category(formatting, 'border_style'),
-        compose_style_category(formatting, 'text_style')
-    ]
-    css = ''.join(css)
-    return {'style': css} if len(css) else {}
+    if not formatting is None:
+        css = [
+            compose_style_category(formatting, 'table_style'),
+            compose_style_category(formatting, 'table_row_style'),
+            compose_style_category(formatting, 'cell_style'),
+            compose_style_category(formatting, 'border_style'),
+            compose_style_category(formatting, 'text_style')
+        ]
+        css = ''.join(css)
+        return {'style': css} if len(css) else {}
+    return {}
 
 
 def compose_style_category(formatting, category=''):

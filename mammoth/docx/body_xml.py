@@ -521,26 +521,14 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         else:
             formatting = _find_table_cell_props(properties)
 
-        if is_debug_mode():
-          return _read_xml_elements(element.children) \
-              .map(lambda children: documents.table_cell_unmerged(
-                  children=children,
-                  colspan=colspan,
-                  rowspan=1,
-                  vmerge=read_vmerge(properties),
-          ))
-        return _ReadResult.map_results(
-            read_table_conditional_style(properties),
-            _read_xml_elements(element.children),
-            lambda style, children: _add_attrs(
-                documents.table_cell(
-                    children=children,
-                    formatting=formatting,
-                    style_id=style[0],
-                    style_name=style[1],
-                ),
-                _vmerge=read_vmerge(properties),
-            ))
+        return _read_xml_elements(element.children) \
+            .map(lambda children: documents.table_cell_unmerged(
+                children=children,
+                colspan=formatting['attributes']['colspan'],
+                rowspan=formatting['attributes']['rowspan'],
+                vmerge=read_vmerge(properties),
+                formatting=formatting,
+        ))
 
     def _find_table_cell_props(properties):
         """
@@ -693,11 +681,11 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         for row in rows:
             cell_index = 0
             for cell in row.children:
-                if cell._vmerge and cell_index in columns:
+                if cell.vmerge and cell_index in columns:
                     columns[cell_index].formatting['attributes']['rowspan'] += 1
                 else:
                     columns[cell_index] = cell
-                    cell._vmerge = False
+                    cell.vmerge = False
                 cell_index += cell.formatting['attributes']['colspan']
 
         for row in rows:
@@ -706,10 +694,12 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
                     children=cell.children,
                     colspan=cell.colspan,
                     rowspan=cell.rowspan,
+                    formatting=cell.formatting,
                 )
                 for cell in row.children
                 if not cell.vmerge
             ]
+
 
         return _success(rows)
 
@@ -1050,6 +1040,13 @@ def _concat(*values):
         for element in value:
             result.append(element)
     return result
+
+
+def _add_attrs(obj, **kwargs):
+    for key, value in kwargs.items():
+        setattr(obj, key, value)
+
+    return obj
 
 
 def _is_int(value):
