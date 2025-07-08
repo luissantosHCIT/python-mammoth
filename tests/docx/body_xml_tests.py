@@ -788,6 +788,89 @@ class CheckboxTests:
 
         assert_that(result, is_checkbox(checked=True))
 
+    def test_when_structured_document_tag_checkbox_has_sdt_content_then_checkbox_replaces_single_character(self):
+        element = xml_element("w:tbl", {}, [
+            w_tr(
+                xml_element("w:sdt", {}, [
+                    xml_element("w:sdtPr", {}, [
+                        xml_element("wordml:checkbox", {}, [
+                            xml_element("wordml:checked", {"wordml:val": "1"}),
+                        ]),
+                    ]),
+                    xml_element("w:sdtContent", {}, [
+                        xml_element("w:tc", {}, [
+                            xml_element("w:p", {}, [
+                                xml_element("w:r", {}, [
+                                    xml_element("w:t", {}, [
+                                        xml_text("☐"),
+                                    ]),
+                                ]),
+                            ]),
+                        ]),
+                    ]),
+                ]),
+            ),
+        ])
+
+        result = _read_and_get_document_xml_element(element)
+
+        assert_equal(result, documents.table([
+            documents.table_row([
+                documents.table_cell([
+                    documents.paragraph([
+                        documents.run([
+                            documents.checkbox(checked=True),
+                        ]),
+                    ]),
+                ]),
+            ]),
+        ]))
+
+    def test_when_structured_document_tag_checkbox_has_sdt_content_then_deleted_content_is_ignored(self):
+        element = xml_element("w:tbl", {}, [
+            w_tr(
+                xml_element("w:sdt", {}, [
+                    xml_element("w:sdtPr", {}, [
+                        xml_element("wordml:checkbox", {}, [
+                            xml_element("wordml:checked", {"wordml:val": "1"}),
+                        ]),
+                    ]),
+                    xml_element("w:sdtContent", {}, [
+                        xml_element("w:tc", {}, [
+                            xml_element("w:p", {}, [
+                                xml_element("w:r", {}, [
+                                    xml_element("w:t", {}, [
+                                        xml_text("☐"),
+                                    ]),
+                                ]),
+                                xml_element("w:del", {}, [
+                                    xml_element("w:r", {}, [
+                                        xml_element("w:t", {}, [
+                                            xml_text("☐")
+                                        ])
+                                    ])
+                                ]),
+                            ]),
+                        ]),
+                    ]),
+                ]),
+            ),
+        ])
+
+        result = _read_and_get_document_xml_element(element)
+
+        assert_equal(result, documents.table([
+            documents.table_row([
+                documents.table_cell([
+                    documents.paragraph([
+                        documents.run([
+                            documents.checkbox(checked=True),
+                        ]),
+                    ]),
+                ]),
+            ]),
+        ]))
+
     def _complex_field_checkbox_paragraph(self, ff_data_children):
         return xml_element("w:p", {}, [
             xml_element("w:r", {}, [
@@ -992,6 +1075,44 @@ class TableTests(object):
         expected_result = documents.table([
             documents.table_row([documents.table_cell([], colspan=2), documents.table_cell([])]),
             documents.table_row([documents.table_cell([]), documents.table_cell([])]),
+        ])
+        assert_equal(expected_result, result)
+
+
+    def test_when_row_is_marked_as_deleted_in_row_properties_then_row_is_ignored(self):
+        element = xml_element("w:tbl", {}, [
+            xml_element("w:tr", {}, [
+                xml_element("w:tc", {}, [
+                    xml_element("w:p", {}, [
+                        _run_element_with_text("Row 1"),
+                    ]),
+                ]),
+            ]),
+
+            xml_element("w:tr", {}, [
+                xml_element("w:trPr", {}, [
+                    xml_element("w:del")
+                ]),
+                xml_element("w:tc", {}, [
+                    xml_element("w:p", {}, [
+                        _run_element_with_text("Row 2"),
+                    ]),
+                ]),
+            ]),
+        ])
+
+        result = _read_and_get_document_xml_element(element)
+
+        expected_result = documents.table([
+            documents.table_row([
+                documents.table_cell([
+                    documents.paragraph([
+                        documents.run([
+                            documents.text("Row 1"),
+                        ]),
+                    ]),
+                ]),
+            ]),
         ])
         assert_equal(expected_result, result)
 
@@ -1406,17 +1527,30 @@ def test_text_boxes_have_content_appended_after_containing_paragraph():
     result = _read_and_get_document_xml_elements(paragraph)
     assert_equal(result[1].style_id, "textbox-content")
 
-def test_alternate_content_is_read_using_fallback():
-    element = xml_element("mc:AlternateContent", {}, [
-        xml_element("mc:Choice", {"Requires": "wps"}, [
-            _paragraph_with_style_id("first")
-        ]),
-        xml_element("mc:Fallback", {}, [
-            _paragraph_with_style_id("second")
+
+class AlternateContentTests(object):
+    def test_when_fallback_is_present_then_fallback_is_read(self):
+        element = xml_element("mc:AlternateContent", {}, [
+            xml_element("mc:Choice", {"Requires": "wps"}, [
+                _paragraph_with_style_id("first")
+            ]),
+            xml_element("mc:Fallback", {}, [
+                _paragraph_with_style_id("second")
+            ])
         ])
-    ])
-    result = _read_and_get_document_xml_element(element)
-    assert_equal("second", result.style_id)
+        result = _read_and_get_document_xml_element(element)
+        assert_equal("second", result.style_id)
+
+
+    def test_when_fallback_is_not_present_then_element_is_ignored(self):
+        element = xml_element("mc:AlternateContent", {}, [
+            xml_element("mc:Choice", {"Requires": "wps"}, [
+                _paragraph_with_style_id("first")
+            ]),
+        ])
+        result = _read_and_get_document_xml_elements(element)
+        assert_equal([], result)
+
 
 def test_sdt_is_read_using_sdt_content():
     element = xml_element("w:sdt", {}, [

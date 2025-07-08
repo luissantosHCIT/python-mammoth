@@ -9,6 +9,7 @@ import copy
 import cobble
 
 from . import documents, results, html_paths, images, writers, html
+from .debug import is_debug_mode
 from .docx.files import InvalidFileReferenceError
 from .html import ForceWrite, Element as HTMLElement
 from .attributes import compose_attributes, compose_style
@@ -24,7 +25,8 @@ def convert_document_element_to_html(element,
         convert_image=None,
         id_prefix=None,
         output_format=None,
-        ignore_empty_paragraphs=True):
+        ignore_empty_paragraphs=True
+        ):
 
     if style_map is None:
         style_map = []
@@ -51,7 +53,7 @@ def convert_document_element_to_html(element,
         id_prefix=id_prefix,
         ignore_empty_paragraphs=ignore_empty_paragraphs,
         note_references=[],
-        comments=comments,
+        comments=comments
     )
     context = _ConversionContext(is_table_header=False)
     nodes = converter.visit(element, context)
@@ -70,7 +72,8 @@ class _ConversionContext(object):
 
 
 class _DocumentConverter(documents.element_visitor(args=1)):
-    def __init__(self, messages, style_map, convert_image, id_prefix, ignore_empty_paragraphs, note_references, comments):
+    def __init__(self, messages, style_map, convert_image, id_prefix, ignore_empty_paragraphs, note_references,
+                 comments):
         self._messages = messages
         self._style_map = style_map
         self._id_prefix = id_prefix
@@ -100,7 +103,6 @@ class _DocumentConverter(documents.element_visitor(args=1)):
             for html_node in self.visit_comment(referenced_comment, context)
         ])
         return nodes + [notes_list, comments]
-
 
     def visit_paragraph(self, paragraph, context):
         def children():
@@ -136,7 +138,6 @@ class _DocumentConverter(documents.element_visitor(args=1)):
             else:
                 e.attributes.update(attributes)
             self._update_path_with_attributes(e.children, skip_tags, attributes)
-
 
     def visit_run(self, run, context):
         nodes = lambda: self._visit_all(run.children, context)
@@ -302,7 +303,6 @@ class _DocumentConverter(documents.element_visitor(args=1)):
             html.element("li", {"id": self._note_html_id(note)}, note_body)
         ]
 
-
     def visit_comment_reference(self, reference, context):
         def nodes():
             comment = self._comments[reference.comment_id]
@@ -345,14 +345,12 @@ class _DocumentConverter(documents.element_visitor(args=1)):
             html.element("dd", {}, body),
         ]
 
-
     def _visit_all(self, elements, context):
         return [
             html_node
             for element in elements
             for html_node in self.visit(element, context)
         ]
-
 
     def _find_html_path_for_paragraph(self, paragraph):
         default = html_paths.path([html_paths.element("p", fresh=True)])
@@ -361,7 +359,6 @@ class _DocumentConverter(documents.element_visitor(args=1)):
 
     def _find_html_path_for_run(self, run):
         return self._find_html_path(run, "run", default=html_paths.empty, warn_unrecognised=True)
-
 
     def _find_html_path(self, element, element_type, default, warn_unrecognised=False):
         style = self._find_style(element, element_type)

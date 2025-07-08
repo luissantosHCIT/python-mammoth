@@ -1,16 +1,20 @@
 import contextlib
+import copy
 import re
 import sys
 
 from .. import documents
 from .. import results
 from .. import lists
-from . import complex_fields, xmlparser
+from .. import transforms
+from . import complex_fields
 from .dingbats import dingbats
 from .xmlparser import node_types, XmlElement, null_xml_element
 from .styles_xml import Styles
 from .uris import replace_fragment, uri_to_zip_entry_name
+from ..debug import is_debug_mode, print_and_pause, print_debug, pause_debug
 from ..html import MS_BORDER_STYLES, MS_CELL_ALIGNMENT_STYLES
+from ..word_formatting import WordFormatting
 
 if sys.version_info >= (3,):
     unichr = chr
@@ -30,7 +34,8 @@ def reader(
         relationships=None,
         styles=None,
         docx_file=None,
-        files=None
+        files=None,
+        embed_css=False
 ):
     if styles is None:
         styles = Styles.EMPTY
@@ -42,6 +47,7 @@ def reader(
         styles=styles,
         docx_file=docx_file,
         files=files,
+        embed_css=embed_css,
     )
     return _BodyReader(read_all)
 
@@ -55,9 +61,12 @@ class _BodyReader(object):
         return results.Result(result.elements, result.messages)
 
 
-def _create_reader(numbering, content_types, relationships, styles, docx_file, files):
+def _create_reader(numbering, content_types, relationships, styles, docx_file, files, embed_css=False):
     current_instr_text = []
     complex_field_stack = []
+
+    if embed_css:
+        word_formatting = WordFormatting(styles._styles_node)
 
     # When a paragraph is marked as deleted, its contents should be combined
     # with the following paragraph. See 17.13.5.15 del (Deleted Paragraph) of
@@ -94,7 +103,11 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         # Meaning, the rPr element will only appear inside a run if that run has special formatting.
         # If the run follows the parent's formatting, the rPr element will be in the parent's *Pr element.
         properties = element.find_child_or_null("w:rPr")
-        props, formatting = _find_run_properties(properties)
+        if embed_css:
+            formatting = word_formatting.get_element_formatting(element)
+            props = formatting['text_style']['_props']
+        else:
+            props, formatting = _find_run_properties(properties)
 
         def add_complex_field_hyperlink(children):
             hyperlink_kwargs = current_hyperlink_kwargs()
@@ -144,9 +157,9 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         if font_color is not None and font_color != 'none':
             font_color = font_color
         else:
-            font_color = None
+            font_color = '000000'
         if font_color is not None:
-            formatting['color'] = font_color
+            formatting['color'] = f'#{font_color}'
 
         is_bold = read_boolean_element(properties.find_child("w:b"))
         if is_bold:
@@ -211,7 +224,11 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
 
     def paragraph(element):
         properties = element.find_child_or_null("w:pPr")
-        props, formatting = _find_paragraph_props(properties)
+        if embed_css:
+            formatting = word_formatting.get_element_formatting(element)
+            props = formatting['text_style']['_props']
+        else:
+            props, formatting = _find_paragraph_props(properties)
 
         if props['is_deleted'] is not None:
             for child in element.children:
@@ -251,6 +268,8 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
 
         indent = _read_paragraph_indent(properties.find_child_or_null("w:ind"))
         props['indent'] = indent
+
+        formatting['_conditional_style']: _find_conditional_style_props(properties)
         return props, formatting
 
     def _read_paragraph_style(properties):
@@ -398,6 +417,10 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
 
     def table(element):
         properties = element.find_child_or_null("w:tblPr")
+        if embed_css:
+            formatting = word_formatting.get_element_formatting(element)
+        else:
+            formatting = _find_table_props(properties)
         return _ReadResult.map_results(
             read_table_style(properties),
             _read_xml_elements(element.children)
@@ -405,7 +428,7 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
 
             lambda style, children: documents.table(
                 children=children,
-                formatting=_find_table_props(properties),
+                formatting=formatting,
                 style_id=style[0],
                 style_name=style[1],
             ),
@@ -434,19 +457,29 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
 
         return {
             'table_style': table_style,
-            'border_style': _find_border_style_props(tblBorders)
+            'border_style': _find_border_style_props(tblBorders, {'border-collapse': 'collapse'})
         }
 
     def table_row(element):
         properties = element.find_child_or_null("w:trPr")
-        is_header = bool(properties.find_child("w:tblHeader"))
+
+        # See 17.13.5.12 del (Deleted Table Row) of ECMA-376 4th edition Part 1
+        is_deleted = bool(properties.find_child("w:del"))
+        if is_deleted:
+            return _empty_result
+
+        is_header = bool(properties.find_child_or_null("w:tblHeader").attributes.get("w:val", "false") == "true")
+        if embed_css:
+            formatting = word_formatting.get_element_formatting(element)
+        else:
+            formatting = _find_table_row_props(properties)
         return _ReadResult.map_results(
             read_table_conditional_style(properties),
             _read_xml_elements(element.children),
             lambda style, children: documents.table_row(
                 children=children,
                 is_header=is_header,
-                formatting=_find_table_row_props(properties),
+                formatting=formatting,
                 style_id=style[0],
                 style_name=style[1],
             )
@@ -466,6 +499,7 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
             table_row_style['height'] = f"{round(float(height) * TWIP_TO_PIXELS,1)}px"
 
         return {
+            '_conditional_style': _find_conditional_style_props(properties),
             'table_row_style': table_row_style
         }
 
@@ -481,19 +515,20 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
 
     def table_cell(element):
         properties = element.find_child_or_null("w:tcPr")
+        if embed_css:
+            formatting = word_formatting.get_element_formatting(element)
+            formatting['_conditional_style'] = _find_conditional_style_props(properties)
+        else:
+            formatting = _find_table_cell_props(properties)
 
-        return _ReadResult.map_results(
-            read_table_conditional_style(properties),
-            _read_xml_elements(element.children),
-            lambda style, children: _add_attrs(
-                documents.table_cell(
-                    children=children,
-                    formatting=_find_table_cell_props(properties),
-                    style_id=style[0],
-                    style_name=style[1],
-                ),
-                _vmerge=read_vmerge(properties),
-            ))
+        return _read_xml_elements(element.children) \
+            .map(lambda children: documents.table_cell_unmerged(
+                children=children,
+                colspan=formatting['attributes']['colspan'],
+                rowspan=formatting['attributes']['rowspan'],
+                vmerge=read_vmerge(properties),
+                formatting=formatting,
+        ))
 
     def _find_table_cell_props(properties):
         """
@@ -512,20 +547,22 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
             cell_style['vertical-align'] = MS_CELL_ALIGNMENT_STYLES[vAlign]
 
         return {
-            'conditional_style': _find_conditional_style_props(properties),
+            '_conditional_style': _find_conditional_style_props(properties),
             'cell_style': cell_style,
-            'colspan': 1 if gridspan is None else int(gridspan),
-            'rowspan': 1,
+            'attributes': {
+                'colspan': 1 if gridspan is None else int(gridspan),
+                'rowspan': 1,
+            },
             'border_style': _find_border_style_props(properties),
 
         }
 
-    def _find_border_style_props(properties):
+    def _find_border_style_props(properties, initial_formatting={}):
         """
         Check out `Table Cell Properties - Borders <http://officeopenxml.com/WPtableCellProperties-Borders.php>`_
         """
         tcBorders = properties.find_child_or_null("w:tcBorders")
-        formatting = {}
+        formatting = copy.deepcopy(initial_formatting)
 
         top = tcBorders.find_child_or_null("w:top")
         top_width = top.attributes.get('w:sz')
@@ -631,7 +668,7 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
             )])
 
         unexpected_non_cells = any(
-            not isinstance(cell, documents.TableCell)
+            not isinstance(cell, documents.TableCellUnmerged)
             for row in rows
             for cell in row.children
         )
@@ -644,17 +681,25 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         for row in rows:
             cell_index = 0
             for cell in row.children:
-                if cell._vmerge and cell_index in columns:
-                    columns[cell_index].formatting['rowspan'] += 1
+                if cell.vmerge and cell_index in columns:
+                    columns[cell_index].formatting['attributes']['rowspan'] += 1
                 else:
                     columns[cell_index] = cell
-                    cell._vmerge = False
-                cell_index += cell.formatting['colspan']
+                    cell.vmerge = False
+                cell_index += cell.formatting['attributes']['colspan']
 
         for row in rows:
-            row.children = lists.filter(lambda cell: not cell._vmerge, row.children)
-            for cell in row.children:
-                del cell._vmerge
+            row.children = [
+                documents.table_cell(
+                    children=cell.children,
+                    colspan=cell.colspan,
+                    rowspan=cell.rowspan,
+                    formatting=cell.formatting,
+                )
+                for cell in row.children
+                if not cell.vmerge
+            ]
+
 
         return _success(rows)
 
@@ -816,20 +861,52 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
         return _success(documents.comment_reference(element.attributes["w:id"]))
 
     def alternate_content(element):
-        return read_child_elements(element.find_child("mc:Fallback"))
+        return read_child_elements(element.find_child_or_null("mc:Fallback"))
 
     def read_sdt(element):
-        checkbox = element.find_child_or_null("w:sdtPr").find_child("wordml:checkbox")
+        content_result = read_child_elements(element.find_child_or_null("w:sdtContent"))
 
-        if checkbox is not None:
+        def handle_content(content):
+            # From the WordML standard: https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/3350cb64-931f-41f7-8824-f18b2568ce66
+            #
+            # > A CT_SdtCheckbox element that specifies that the parent
+            # > structured document tag is a checkbox when displayed in the
+            # > document. The parent structured document tag contents MUST
+            # > contain a single character and optionally an additional
+            # > character in a deleted run.
+            checkbox = element.find_child_or_null("w:sdtPr").find_child("wordml:checkbox")
+
+            if checkbox is None:
+                return content
+
             checked_element = checkbox.find_child("wordml:checked")
             is_checked = (
                     checked_element is not None and
                     read_boolean_attribute_value(checked_element.attributes.get("wordml:val"))
             )
-            return _success(documents.checkbox(checked=is_checked))
-        else:
-            return read_child_elements(element.find_child_or_null("w:sdtContent"))
+            document_checkbox = documents.checkbox(checked=is_checked)
+
+            has_checkbox = False
+
+            def transform_text(text):
+                nonlocal has_checkbox
+                if len(text.value) > 0 and not has_checkbox:
+                    has_checkbox = True
+                    return document_checkbox
+                else:
+                    return text
+
+            replaced_content = list(map(
+                transforms.element_of_type(documents.Text, transform_text),
+                content,
+            ))
+
+            if has_checkbox:
+                return replaced_content
+            else:
+                return document_checkbox
+
+        return content_result.map(handle_content)
 
     handlers = {
         "w:t": text,
