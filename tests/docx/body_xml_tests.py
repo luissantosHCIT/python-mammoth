@@ -22,6 +22,7 @@ from .document_matchers import (
     is_text,
     is_table,
     is_row,
+    is_image,
 )
 from ..testing import assert_equal
 
@@ -138,15 +139,15 @@ class ParagraphTests(object):
 
         assert_equal("1", paragraph.numbering.level_index)
 
-    def test_numbering_properties_are_ignored_if_lvl_is_missing(self):
+    def test_when_numbering_properties_are_missing_level_then_level_of_0_is_assumed(self):
         paragraph_xml = self._paragraph_with_numbering_properties([
             xml_element("w:numId", {"w:val": "42"}),
         ])
 
-        numbering = _NumberingMap({"42": {"1": documents.numbering_level("1", True)}})
+        numbering = _NumberingMap({"42": {"0": documents.numbering_level("0", True)}})
         paragraph = _read_and_get_document_xml_element(paragraph_xml, numbering=numbering)
 
-        assert_equal(None, paragraph.numbering)
+        assert_equal(documents.numbering_level("0", True), paragraph.numbering)
 
     def test_numbering_properties_are_ignored_if_num_id_is_missing(self):
         paragraph_xml = self._paragraph_with_numbering_properties([
@@ -1118,15 +1119,93 @@ class TableTests(object):
 
 
     def test_warning_if_non_row_in_table(self):
-        element = xml_element("w:tbl", {}, [xml_element("w:p")])
+        # Include normal rows to ensure they're still read correctly.
+        element = xml_element("w:tbl", {}, [
+            xml_element("w:tr", {}, [
+                xml_element("w:tc", {}, [
+                    xml_element("w:p", {}, [
+                        _run_element_with_text("Row 1"),
+                    ]),
+                ]),
+            ]),
+            xml_element("w:p"),
+            xml_element("w:tr", {}, [
+                xml_element("w:tc", {}, [
+                    xml_element("w:p", {}, [
+                        _run_element_with_text("Row 2"),
+                    ]),
+                ]),
+            ]),
+        ])
+
         result = _read_document_xml_element(element)
+
+        expected_value = documents.table([
+            documents.table_row([
+                documents.table_cell([
+                    documents.paragraph([
+                        documents.run([
+                            documents.text("Row 1"),
+                        ]),
+                    ]),
+                ]),
+            ]),
+            documents.paragraph([]),
+            documents.table_row([
+                documents.table_cell([
+                    documents.paragraph([
+                        documents.run([
+                            documents.text("Row 2"),
+                        ]),
+                    ]),
+                ]),
+            ]),
+        ])
+        assert_equal(expected_value, result.value)
         expected_warning = results.warning("unexpected non-row element in table, cell merging may be incorrect")
         assert_equal([expected_warning], result.messages)
 
 
     def test_warning_if_non_cell_in_table_row(self):
-        element = xml_element("w:tbl", {}, [w_tr(xml_element("w:p"))])
+        # Include normal cells to ensure they're still read correctly.
+        element = xml_element("w:tbl", {}, [
+            w_tr(
+                xml_element("w:tc", {}, [
+                    xml_element("w:p", {}, [
+                        _run_element_with_text("Cell 1"),
+                    ]),
+                ]),
+                xml_element("w:p"),
+                xml_element("w:tc", {}, [
+                    xml_element("w:p", {}, [
+                        _run_element_with_text("Cell 2"),
+                    ]),
+                ]),
+            ),
+        ])
+
         result = _read_document_xml_element(element)
+
+        expected_value = documents.table([
+            documents.table_row([
+                documents.table_cell([
+                    documents.paragraph([
+                        documents.run([
+                            documents.text("Cell 1"),
+                        ]),
+                    ]),
+                ]),
+                documents.paragraph([]),
+                documents.table_cell([
+                    documents.paragraph([
+                        documents.run([
+                            documents.text("Cell 2"),
+                        ]),
+                    ]),
+                ]),
+            ]),
+        ])
+        assert_equal(expected_value, result.value)
         expected_warning = results.warning("unexpected non-cell element in table row, cell merging may be incorrect")
         assert_equal([expected_warning], result.messages)
 
@@ -1278,10 +1357,10 @@ class ImageTests(object):
     IMAGE_BYTES = b"Not an image at all!"
     IMAGE_RELATIONSHIP_ID = "rId5"
 
-    def _read_embedded_image(self, element):
+    def _read_embedded_image(self, element, relationships=None):
         relationships = Relationships([
             _image_relationship(self.IMAGE_RELATIONSHIP_ID, "media/hat.png"),
-        ])
+        ] + (relationships or []))
 
         mocks = funk.Mocks()
         docx_file = mocks.mock()
@@ -1477,6 +1556,31 @@ class ImageTests(object):
         assert_equal([], result.messages)
         assert_equal(None, result.value)
 
+    def test_can_read_pictures_with_hyperlink_specified_in_document_properties(self):
+        drawing_element = _create_inline_image(
+            blip=_embedded_blip(self.IMAGE_RELATIONSHIP_ID),
+            doc_pr_children=[
+                xml_element("a:hlinkClick", {"r:id": "rId42"})
+            ],
+        )
+
+        result = self._read_embedded_image(
+            drawing_element,
+            relationships=[_hyperlink_relationship("rId42", "http://example.com")],
+        )
+
+        assert_that(result, is_hyperlink(
+            href="http://example.com",
+            children=is_sequence(
+                is_image(
+                    content_type="image/png",
+                )
+            )
+        ))
+        image = result.children[0]
+        with image.open() as image_file:
+            assert_equal(self.IMAGE_BYTES, image_file.read())
+
 
 def test_footnote_reference_has_id_read():
     footnote_xml = xml_element("w:footnoteReference", {"w:id": "4"})
@@ -1632,9 +1736,18 @@ def _text_element(value):
     return xml_element("w:t", {}, [xml_text(value)])
 
 
-def _create_inline_image(blip, description=None, title=None):
+def _create_inline_image(blip, description=None, doc_pr_children=None, title=None):
     return xml_element("w:drawing", {}, [
-        xml_element("wp:inline", {}, _create_image_elements(blip, description=description, title=title))
+        xml_element(
+            "wp:inline",
+            {},
+            _create_image_elements(
+                blip,
+                description=description,
+                doc_pr_children=doc_pr_children,
+                title=title,
+            )
+        ),
     ])
 
 
@@ -1644,7 +1757,7 @@ def _create_anchored_image(description, blip):
     ])
 
 
-def _create_image_elements(blip, description=None, title=None):
+def _create_image_elements(blip, description=None, doc_pr_children=None, title=None):
     properties = {}
     if description is not None:
         properties["descr"] = description
@@ -1652,7 +1765,7 @@ def _create_image_elements(blip, description=None, title=None):
         properties["title"] = title
 
     return [
-        xml_element("wp:docPr", properties),
+        xml_element("wp:docPr", properties, doc_pr_children or []),
         xml_element("a:graphic", {}, [
             xml_element("a:graphicData", {}, [
                 xml_element("pic:pic", {}, [

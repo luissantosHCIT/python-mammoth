@@ -375,6 +375,12 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
             if level is not None:
                 return level
 
+        # Some malformed documents define numbering levels without an index, and
+        # reference the numbering using a w:numPr element without a w:ilvl child.
+        # To handle such cases, we assume a level of 0 as a fallback.
+        if num_id is not None:
+            return numbering.find_level(num_id, "0")
+
         return None
 
     def _read_paragraph_indent(element):
@@ -675,6 +681,7 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
             for row in rows
         )
         if unexpected_non_rows:
+            rows = remove_unmerged_table_cells(rows)
             return _elements_result_with_messages(rows, [results.warning(
                 "unexpected non-row element in table, cell merging may be incorrect"
             )])
@@ -685,6 +692,7 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
             for cell in row.children
         )
         if unexpected_non_cells:
+            rows = remove_unmerged_table_cells(rows)
             return _elements_result_with_messages(rows, [results.warning(
                 "unexpected non-cell element in table row, cell merging may be incorrect"
             )])
@@ -712,6 +720,21 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
             ]
 
         return _success(rows)
+
+
+    def remove_unmerged_table_cells(rows):
+        return list(map(
+            transforms.element_of_type(
+                documents.TableCellUnmerged,
+                lambda cell: documents.table_cell(
+                    children=cell.children,
+                    colspan=cell.colspan,
+                    rowspan=cell.rowspan,
+                ),
+            ),
+            rows,
+        ))
+
 
     def read_child_elements(element):
         return _read_xml_elements(element.children)
@@ -764,31 +787,49 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
             return _empty_result_with_message(warning)
 
     def inline(element):
-        properties = element.find_child_or_null("wp:docPr").attributes
+        properties_element = element.find_child_or_null("wp:docPr")
+
+        properties = properties_element.attributes
         if properties.get("descr", "").strip():
             alt_text = properties.get("descr")
         else:
             alt_text = properties.get("title")
         pic_element = element.find_children("a:graphic") \
+
+        hlink_click_element = properties_element.find_child_or_null("a:hlinkClick")
+        hyperlink_relationship_id = hlink_click_element.attributes.get("r:id")
+        if hyperlink_relationship_id:
+            href = relationships.find_target_by_relationship_id(hyperlink_relationship_id)
+        else:
+            href = None
+
+        blips = element.find_children("a:graphic") \
             .find_children("a:graphicData") \
             .find_children("pic:pic")
         blips = pic_element.find_children("pic:blipFill") \
             .find_children("a:blip")
         shape_props_element = pic_element.find_children("pic:spPr")
         shape_props = _find_image_shapes(shape_props_element)
-        return _read_blips(blips, alt_text, shape_props)
+        return _read_blips(blips, alt_text=alt_text, shape_props=shape_props, href=href)
 
-    def _read_blips(blips, alt_text, shape_props):
-        return _ReadResult.concat(lists.map(lambda blip: _read_blip(blip, alt_text, shape_props), blips))
+    def _read_blips(blips, alt_text, shape_props, href):
+        return _ReadResult.concat(lists.map(lambda blip: _read_blip(blip, alt_text=alt_text, shape_props=shape_props, href=href), blips))
 
-    def _read_blip(element, alt_text, shape_props):
+    def _read_blip(element, alt_text, shape_props, href):
         blip_image = _find_blip_image(element)
 
         if blip_image is None:
             warning = results.warning("Could not find image file for a:blip element")
             return _empty_result_with_message(warning)
+
+        result = _read_image(blip_image, alt_text, shape_props)
+        if href is None:
+            return result
         else:
-            return _read_image(blip_image, alt_text, shape_props)
+            return result.map(lambda image_elements: documents.hyperlink(
+                image_elements,
+                href=href,
+            ))
 
     def _read_image(image_file, alt_text, shape_props):
         image_path, open_image = image_file

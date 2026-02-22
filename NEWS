@@ -1,3 +1,18 @@
+# 1.12.0
+
+* Handle hyperlinked wp:anchor and wp:inline elements.
+
+# 1.11.0
+
+* Ignore style definitions using a style ID that has already been used.
+
+* Fix conversion of unmerged table cells.
+
+* Disable external file accesses by default. External file access can be enabled
+  using the external_file_access argument.
+
+* Handle numbering levels defined without an index.
+
 # 1.10.0
 
 * Add "Heading" and "Body" styles, as found in documents created by Apple Pages,
@@ -8,6 +23,8 @@
   been ignored.
 
 * Ignore deleted table rows.
+
+* Add notes on security.
 
 # 1.9.1
 

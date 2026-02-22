@@ -19,6 +19,7 @@ is_hyperlink = create_element_matcher(documents.Hyperlink)
 is_checkbox = create_element_matcher(documents.Checkbox)
 is_table = create_element_matcher(documents.Table)
 is_row = create_element_matcher(documents.TableRow)
+is_image = create_element_matcher(documents.Image)
 
 
 is_empty_run = is_run(children=[])
